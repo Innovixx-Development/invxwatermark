@@ -1,0 +1,9 @@
+{
+	"name": "invxwatermark",
+	"dockerComposeFile": "docker-compose.yml",
+	"service": "app",
+	"workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+	"mounts": [
+    "type=bind,source=/home/${localEnv:USER}/.ssh,target=/home/node/.ssh,readonly"
+  ]
+}
