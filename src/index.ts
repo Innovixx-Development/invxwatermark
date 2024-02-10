@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { execSync } from 'child_process';
-import readline from 'readline';
 import fs from 'fs';
 import path from 'path';
 
@@ -33,21 +32,16 @@ for (let i = 0; i < args.length; i += 1) {
 try {
   execSync('convert -version');
 } catch (error) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  console.error('ImageMagick is required but not installed.');
+  process.exit(1);
+}
 
-  rl.question('ImageMagick is not installed. Do you want to install it? (y/n): ', (answer) => {
-    if (answer.toLowerCase() === 'y') {
-      // Install ImageMagick
-      execSync('sudo apt-get install imagemagick');
-    } else {
-      process.exit(1);
-    }
-
-    rl.close();
-  });
+// Check if Ghostscript is present for PDF processing with ImageMagick
+try {
+  execSync('gs -version');
+} catch (error) {
+  console.error('Ghostscript is required but not installed.');
+  process.exit(1);
 }
 
 // Validate input and output paths
@@ -56,36 +50,63 @@ if (inputFiles.length === 0) {
   process.exit(1);
 }
 
-
 if (!fs.existsSync(watermarkImage)) {
   console.error(`Watermark image not found: ${watermarkImage}`);
   process.exit(1);
 }
 
 // Create temporary folder if it doesn't exist
-const tempFolder = '/tmp';
+const tempFolder = '/tmp/watermarking';
 fs.mkdirSync(tempFolder, { recursive: true });
 
+const watermarkingCommand = (inputPath: string, outputPath: string) => {
+  return `composite -gravity southeast -geometry +50+50 "${watermarkImage}" "${inputPath}" "${outputPath}" && \
+    composite -gravity northwest -geometry +50+50 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity northeast -geometry +50+50 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity southwest -geometry +50+50 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity center -geometry +0+0 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity north -geometry +0+50 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity south -geometry +0+50 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity east -geometry +50+0 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity west -geometry +50+0 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity east -geometry +250+400 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity west -geometry +250+400 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity east -geometry +250-400 "${watermarkImage}" "${outputPath}" "${outputPath}" && \
+    composite -gravity west -geometry +250-400 "${watermarkImage}" "${outputPath}" "${outputPath}"`;
+};
+
 inputFiles.forEach((inputFile) => {
-  // Generate a unique ID for the temporary image file
+  const fileExtension = path.extname(inputFile).toLowerCase();
+
+  // Generate a unique ID for the temporary files
   const uniqueId = Math.floor(Date.now() / 1000);
 
-  // Perform watermarking
-  execSync(
-    `composite -gravity southeast -geometry +50+50 "${watermarkImage}" "${inputFile}" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity northwest -geometry +50+50 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity northeast -geometry +50+50 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity southwest -geometry +50+50 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity center -geometry +0+0 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity north -geometry +0+50 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity south -geometry +0+50 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity east -geometry +50+0 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity west -geometry +50+0 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity east -geometry +250+400 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity west -geometry +250+400 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity east -geometry +250-400 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    composite -gravity west -geometry +250-400 "${watermarkImage}" "${tempFolder}/temp_image_${uniqueId}.png" "${tempFolder}/temp_image_${uniqueId}.png" && \
-    mv "${tempFolder}/temp_image_${uniqueId}.png" "${path.join(outputFolder, path.basename(inputFile, path.extname(inputFile)))}_watermarked.png"`,
-    { stdio: 'inherit' },
-  );
+  if (fileExtension === '.pdf') {
+    // Convert PDF pages to images
+    const tempImagesPath = `${tempFolder}/${uniqueId}-page-%d.png`;
+    execSync(`convert -density 300 "${inputFile}" "${tempImagesPath}"`);
+
+    // Process each image with watermarking
+    const pageFiles = fs.readdirSync(tempFolder).filter((file) => file.startsWith(`${uniqueId}-page`));
+    pageFiles.forEach((pageFile) => {
+      const tempImagePath = path.join(tempFolder, pageFile);
+      execSync(watermarkingCommand(tempImagePath, tempImagePath), { stdio: 'inherit' });
+    });
+
+    // Combine watermarked images into a single PDF
+    const watermarkedPdfPath = `${path.join(outputFolder, path.basename(inputFile, fileExtension))}_watermarked.pdf`;
+    execSync(`convert "${tempFolder}/${uniqueId}-page-*.png" "${watermarkedPdfPath}"`);
+
+    // Clean up temporary images
+    pageFiles.forEach((pageFile) => {
+      fs.unlinkSync(path.join(tempFolder, pageFile));
+    });
+  } else {
+    // Temporary image output path
+    const tempOutputImagePath = `${tempFolder}/temp_image_${uniqueId}.png`;
+    // Apply watermark to image files
+    execSync(watermarkingCommand(inputFile, tempOutputImagePath), { stdio: 'inherit' });
+    // Move watermarked image to the output folder
+    fs.renameSync(tempOutputImagePath, path.join(outputFolder, `${path.basename(inputFile, fileExtension)}_watermarked${fileExtension}`));
+  }
 });
